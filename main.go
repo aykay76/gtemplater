@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -26,14 +27,39 @@ type DashboardTemplateData struct {
 	Namespace string
 }
 
-var redisClient *redis.Client
-var githubowner = "aykay76"
-var githubrepo = "autograf"
-var githubpat = ""
-var grafanabaseurl = ""
-var grafanaapitoken = ""
+var (
+	githubowner        = *flag.String("github-owner", "", "Owner of the repository in GitHub")
+	githubrepo         = *flag.String("github-repo", "", "GitHub repository where templates and dashboards are stored")
+	githubbranch       = *flag.String("github-branch", "master", "Name of branch where dashboards will get created")
+	githubtemplatepath = *flag.String("github-template-path", "/templates", "The path in the repo where templates will be stored")
+	githubpat          = *flag.String("github-pat", "", "Personal access token for GitHub")
+	grafanaapitoken    = *flag.String("grafana-api-token", "eyXxxxxxx", "The REST API token for your Grafana server")
+	grafanabaseurl     = *flag.String("grafana-base-url", "http://localhost:3000", "The home page URL you use to access Grafana")
+	help               = flag.Bool("help", false, "do you need help with the command line?")
+	redisClient        *redis.Client
+)
+
+func envOverride(key string, value string) string {
+	temp, set := os.LookupEnv(key)
+	if set {
+		fmt.Println("Overriding", key, "from environment variable")
+		return temp
+	}
+
+	return value
+}
 
 func main() {
+	flag.CommandLine.Parse(os.Args[1:])
+
+	grafanaapitoken = envOverride("GRAFANA_API_TOKEN", grafanaapitoken)
+	grafanabaseurl = envOverride("GRAFANA_BASE_URL", grafanabaseurl)
+	githubtemplatepath = envOverride("GITHUB_TEMPLATE_PATH", githubtemplatepath)
+	githubbranch = envOverride("GITHUB_BRANCH", githubbranch)
+	githubowner = envOverride("GITHUB_OWNER", githubowner)
+	githubpat = envOverride("GITHUB_ACCESS_TOKEN", githubpat)
+	githubrepo = envOverride("GITHUB_REPOSITORY", githubrepo)
+
 	var ro redis.Options
 	ro.Addr = os.Getenv("REDIS_ADDR")
 
@@ -79,24 +105,23 @@ func main() {
 				err = json.Unmarshal([]byte(nsJson), &ns)
 
 				if err == nil {
-					templateName := ns.Labels["grafana-dashboard-name"]
-
-					td := DashboardTemplateData{ns.ObjectMeta.Labels["grafana-dashboard-name"], ns.ObjectMeta.Name}
+					templateName := ns.Labels["grafana-template"]
 
 					if len(templateName) > 0 {
-						createDashboardFromTemplate(templateName, td)
+						if createDashboardFromTemplate(templateName, ns) == true {
+							// only ACK the message on success
+							redisClient.XAck(stream, consumersGroup, messageID)
+						}
 					}
 				} else {
 					fmt.Println(err)
 				}
-
-				redisClient.XAck(stream, consumersGroup, messageID)
 			}
 		}
 	}
 }
 
-func createDashboardFromTemplate(templateName string, td DashboardTemplateData) {
+func createDashboardFromTemplate(templateName string, td interface{}) bool {
 	ctx := context.Background()
 	ts := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: githubpat},
@@ -104,11 +129,14 @@ func createDashboardFromTemplate(templateName string, td DashboardTemplateData) 
 	tc := oauth2.NewClient(ctx, ts)
 	githubClient := github.NewClient(tc)
 
-	templatePath := filepath.Join("templates", templateName+".json")
+	templatePath := filepath.Join(githubtemplatepath, templateName+".json")
 	fmt.Println("Attempting to get template", templatePath, "from", githubowner, "/", githubrepo)
-	reader, response, err := githubClient.Repositories.DownloadContents(context.TODO(), githubowner, githubrepo, templatePath, nil)
-	fmt.Println(response.Response.Status)
-	fmt.Println(response.Response.Header)
+	reader, githubResponse, err := githubClient.Repositories.DownloadContents(context.TODO(), githubowner, githubrepo, templatePath, nil)
+	fmt.Println(githubResponse.Response.Status)
+	if githubResponse.Response.StatusCode >= 400 {
+		return false
+	}
+
 	content, err := ioutil.ReadAll(reader)
 	if err != nil {
 		fmt.Println(err)
@@ -129,7 +157,7 @@ func createDashboardFromTemplate(templateName string, td DashboardTemplateData) 
 
 	content = b.Bytes()
 
-	// Also upload to Grafana
+	// Upload to Grafana
 	c := grafapi.NewClient(grafanabaseurl, grafanaapitoken)
 	var dashboardContent interface{}
 	json.Unmarshal(content, &dashboardContent)
@@ -143,5 +171,38 @@ func createDashboardFromTemplate(templateName string, td DashboardTemplateData) 
 
 	// TODO: get return information and store in git repo as state for future changes
 	//       or using the uid get the full dashboard definition and store in git
-	c.CreateDashboard(dashboard)
+	fmt.Println("Creating dashboard in Grafana...")
+	grafanaResponse, dashboardResponse := c.CreateDashboard(dashboard)
+	if grafanaResponse.StatusCode >= 200 && grafanaResponse.StatusCode < 300 {
+		fmt.Println("Getting full dashboard from Grafana...")
+		dashboardContent := c.GetDashboard("/api/dashboards/uid/" + dashboardResponse.Uid)
+
+		// dashboard was added successfully, state changed so publish an event
+		payloadBytes, err := json.Marshal(dashboardContent)
+		if err == nil {
+			publishMessage("dashboard created", payloadBytes)
+		} else {
+			fmt.Println(err)
+		}
+	} else {
+		fmt.Println("Status from Grafana does not indicate success", grafanaResponse.Status)
+	}
+
+	return true
+}
+
+func publishMessage(whatHappened string, payload []byte) error {
+	fmt.Println("Publishing to Redis..", whatHappened)
+	fmt.Println(string(payload))
+
+	return redisClient.XAdd(&redis.XAddArgs{
+		Stream:       "dashboards",
+		MaxLen:       0,
+		MaxLenApprox: 0,
+		ID:           "",
+		Values: map[string]interface{}{
+			"whatHappened": whatHappened,
+			"payload":      payload,
+		},
+	}).Err()
 }

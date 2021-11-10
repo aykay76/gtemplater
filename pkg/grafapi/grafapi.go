@@ -52,21 +52,37 @@ func NewClient(baseUri string, apiToken string) *ApiClient {
 }
 
 // ListProjects : return a page of results
-func (c *ApiClient) CreateDashboard(dashboard Dashboard) DashboardResponse {
-	status, responseBody := c.postObject("/api/dashboards/db", dashboard)
-	fmt.Println(status)
-	fmt.Println(string(responseBody))
+func (c *ApiClient) CreateDashboard(dashboard Dashboard) (*http.Response, DashboardResponse) {
+	response, responseBody := c.postObject(c.baseUri+"/api/dashboards/db", dashboard)
 
-	var response DashboardResponse
-	json.Unmarshal(responseBody, &response)
+	var grafanaResponse DashboardResponse
+	json.Unmarshal(responseBody, &grafanaResponse)
 
-	return response
+	return response, grafanaResponse
+}
+
+func (c *ApiClient) GetDashboard(url string) interface{} {
+	fmt.Println("> grafapi.GetDashboard", url)
+	response, body := c.get(c.baseUri + url)
+	if response.StatusCode >= 400 {
+		return nil
+	}
+
+	fmt.Println(string(body))
+
+	var dashboard interface{}
+	err := json.Unmarshal(body, &dashboard)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	return dashboard
 }
 
 // example response:
 // {"id":2,"slug":"monitoring-the-monitor","status":"success","uid":"Ui4ofGcnz","url":"/d/Ui4ofGcnz/monitoring-the-monitor","version":1}
 
-func (c *ApiClient) get(url string) (string, []byte) {
+func (c *ApiClient) get(url string) (*http.Response, []byte) {
 	var req *http.Request
 	var resp *http.Response
 	var err error
@@ -93,17 +109,17 @@ func (c *ApiClient) get(url string) (string, []byte) {
 		log.Fatal(err)
 	}
 
-	return resp.Status, body
+	return resp, body
 }
 
-func (c *ApiClient) post(url string, body []byte) (string, []byte) {
+func (c *ApiClient) post(url string, body []byte) (*http.Response, []byte) {
 	var req *http.Request
 	var resp *http.Response
 	var err error
 
-	fmt.Println("Posting to", c.baseUri+url)
+	fmt.Println("Posting to", url)
 	fmt.Println(string(body))
-	req, err = http.NewRequest(http.MethodPost, c.baseUri+url, bytes.NewBuffer(body))
+	req, err = http.NewRequest(http.MethodPost, url, bytes.NewBuffer(body))
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -117,20 +133,18 @@ func (c *ApiClient) post(url string, body []byte) (string, []byte) {
 	resp, err = httpClient.Do(req)
 	if err != nil {
 		fmt.Println(err)
-		return err.Error(), nil
+		return resp, nil
 	}
 
 	defer resp.Body.Close()
 
-	fmt.Println("response Status:", resp.Status)
-	fmt.Println("response Headers:", resp.Header)
+	fmt.Println("response Status:", resp.StatusCode, "(", resp.Status, ")")
 	responseBody, _ := ioutil.ReadAll(resp.Body)
-	fmt.Println("response Body:", string(responseBody))
 
-	return resp.Status, responseBody
+	return resp, responseBody
 }
 
-func (c *ApiClient) postObject(url string, body interface{}) (string, []byte) {
+func (c *ApiClient) postObject(url string, body interface{}) (*http.Response, []byte) {
 	var bodyBytes []byte
 	var err error
 
