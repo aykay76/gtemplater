@@ -28,37 +28,19 @@ type DashboardTemplateData struct {
 }
 
 var (
-	githubowner        = *flag.String("github-owner", "", "Owner of the repository in GitHub")
-	githubrepo         = *flag.String("github-repo", "", "GitHub repository where templates and dashboards are stored")
-	githubbranch       = *flag.String("github-branch", "master", "Name of branch where dashboards will get created")
-	githubtemplatepath = *flag.String("github-template-path", "/templates", "The path in the repo where templates will be stored")
-	githubpat          = *flag.String("github-pat", "", "Personal access token for GitHub")
-	grafanaapitoken    = *flag.String("grafana-api-token", "eyXxxxxxx", "The REST API token for your Grafana server")
-	grafanabaseurl     = *flag.String("grafana-base-url", "http://localhost:3000", "The home page URL you use to access Grafana")
+	githubowner        = *flag.String("github-owner", os.Getenv("GITHUB_OWNER"), "Owner of the repository in GitHub")
+	githubrepo         = *flag.String("github-repo", os.Getenv("GITHUB_REPOSITORY"), "GitHub repository where templates and dashboards are stored")
+	githubbranch       = *flag.String("github-branch", os.Getenv("GITHUB_BRANCH"), "Name of branch where dashboards will get created")
+	githubtemplatepath = *flag.String("github-template-path", os.Getenv("GITHUB_TEMPLATE_PATH"), "The path in the repo where templates will be stored")
+	githubpat          = *flag.String("github-pat", os.Getenv("GITHUB_ACCESS_TOKEN"), "Personal access token for GitHub")
+	grafanaapitoken    = *flag.String("grafana-api-token", os.Getenv("GRAFANA_API_TOKEN"), "The REST API token for your Grafana server")
+	grafanabaseurl     = *flag.String("grafana-base-url", os.Getenv("GRAFANA_BASE_URL"), "The home page URL you use to access Grafana")
 	help               = flag.Bool("help", false, "do you need help with the command line?")
 	redisClient        *redis.Client
 )
 
-func envOverride(key string, value string) string {
-	temp, set := os.LookupEnv(key)
-	if set {
-		fmt.Println("Overriding", key, "from environment variable")
-		return temp
-	}
-
-	return value
-}
-
 func main() {
 	flag.CommandLine.Parse(os.Args[1:])
-
-	grafanaapitoken = envOverride("GRAFANA_API_TOKEN", grafanaapitoken)
-	grafanabaseurl = envOverride("GRAFANA_BASE_URL", grafanabaseurl)
-	githubtemplatepath = envOverride("GITHUB_TEMPLATE_PATH", githubtemplatepath)
-	githubbranch = envOverride("GITHUB_BRANCH", githubbranch)
-	githubowner = envOverride("GITHUB_OWNER", githubowner)
-	githubpat = envOverride("GITHUB_ACCESS_TOKEN", githubpat)
-	githubrepo = envOverride("GITHUB_REPOSITORY", githubrepo)
 
 	var ro redis.Options
 	ro.Addr = os.Getenv("REDIS_ADDR")
