@@ -108,7 +108,7 @@ func main() {
 					templateName := ns.Labels["grafana-template"]
 
 					if len(templateName) > 0 {
-						if createDashboardFromTemplate(templateName, ns) == true {
+						if createDashboardFromTemplate(templateName, ns.Labels["grafana-dashboard-name"], ns) == true {
 							// only ACK the message on success
 							redisClient.XAck(stream, consumersGroup, messageID)
 						}
@@ -121,7 +121,7 @@ func main() {
 	}
 }
 
-func createDashboardFromTemplate(templateName string, td interface{}) bool {
+func createDashboardFromTemplate(templateName string, targetName string, td interface{}) bool {
 	ctx := context.Background()
 	ts := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: githubpat},
@@ -180,7 +180,7 @@ func createDashboardFromTemplate(templateName string, td interface{}) bool {
 		// dashboard was added successfully, state changed so publish an event
 		payloadBytes, err := json.Marshal(dashboardContent)
 		if err == nil {
-			publishMessage("dashboard created", payloadBytes)
+			publishMessage("dashboard created", targetName+".json", payloadBytes)
 		} else {
 			fmt.Println(err)
 		}
@@ -191,7 +191,7 @@ func createDashboardFromTemplate(templateName string, td interface{}) bool {
 	return true
 }
 
-func publishMessage(whatHappened string, payload []byte) error {
+func publishMessage(whatHappened string, filename string, payload []byte) error {
 	fmt.Println("Publishing to Redis..", whatHappened)
 	fmt.Println(string(payload))
 
@@ -202,6 +202,7 @@ func publishMessage(whatHappened string, payload []byte) error {
 		ID:           "",
 		Values: map[string]interface{}{
 			"whatHappened": whatHappened,
+			"filename":     filename,
 			"payload":      payload,
 		},
 	}).Err()
