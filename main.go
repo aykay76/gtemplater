@@ -195,7 +195,7 @@ func publishMessage(whatHappened string, filename string, payload []byte) error 
 	fmt.Println("Publishing to Redis..", whatHappened)
 	fmt.Println(string(payload))
 
-	return redisClient.XAdd(&redis.XAddArgs{
+	err := redisClient.XAdd(&redis.XAddArgs{
 		Stream:       "dashboards",
 		MaxLen:       0,
 		MaxLenApprox: 0,
@@ -206,4 +206,10 @@ func publishMessage(whatHappened string, filename string, payload []byte) error 
 			"payload":      payload,
 		},
 	}).Err()
+
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	return err
 }
